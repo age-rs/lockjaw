@@ -269,6 +269,29 @@ a new instance, either by a user supplied method or Lockjaw internal generation.
 <h2 id="module"><a class="header" href="#module">Module</a></h2>
 <p>In all Lockjaw documentations, "module" refers to a <em>dependency injection module</em>. When referring to
 Rust modules <code>mod</code> will be used instead.</p>
+<div style="break-before: page; page-break-before: always;"></div><h1 id="changes"><a class="header" href="#changes">Changes</a></h1>
+<h2 id="03"><a class="header" href="#03">0.3</a></h2>
+<ul>
+<li>Dependency gathering is now done through the <a href="setup.html#build-script">build script</a> instead of proc_macro.
+<ul>
+<li>This removes the need for <a href="cross_macro_communication.html">cross macro communication</a> as all info is now readily
+available when proc_macro runs.</li>
+<li>Sources are parsed twice once in the build script and once by the compiler. However, this is already required to
+perform <a href="path_resolution.html">path resolution</a></li>
+<li>The proc_macro now only generate codes, using the result from the build script. The proc macro no longer need to
+resolve global path names.</li>
+<li>Path resolution/dependency gathering now use <a href="https://crates.io/crates/syn">syn</a> to parse the source instead of
+using <a href="https://crates.io/crates/tree-sitter-rust">tree-sitter-rust</a> to be more consistent with how proc_macro
+parse the code.</li>
+</ul>
+</li>
+<li>The <code>lockjaw::prologue!(path/to/src)</code> is removed.
+<ul>
+<li>The build script is able to directly infer the source path.</li>
+</ul>
+</li>
+<li>No longer need to specify <code>root</code>/<code>test</code> in <code>lockjaw::epilogue</code></li>
+</ul>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="project-setup"><a class="header" href="#project-setup">Project Setup</a></h1>
 <h2 id="cargo"><a class="header" href="#cargo">Cargo</a></h2>
 <p>Add lockjaw to the <code>[dependencies]</code> and <code>[build_dependencies]</code> section of your <code>Cargo.toml</code>:</p>
@@ -292,26 +315,15 @@ in <code>main()</code> inside it:</p>
 fn main() {
     lockjaw::build_script();
 }</code></pre>
-<p>Lockjaw will ask you to do this if this step is missing.</p>
-<h2 id="prologue-macro"><a class="header" href="#prologue-macro">Prologue macro</a></h2>
-<p>Before using any Lockjaw attribute macros, the
-lockjaw <a href="https://docs.rs/lockjaw/latest/lockjaw/macro.prologue.html"><code>prologue!()</code></a> macro must be
-called:</p>
-<pre><code class="language-rust no_run noplayground">// https://github.com/azureblaze/lockjaw/tree/main/userguide/projects/setup/src/main.rs
-</code></pre>
-<p>The file path of the current source file should be passed to the prologue.</p>
-<p>Lockjaw need to perform some static analysis on the current source file to understand type names,
-which is an integral part of a dependency injection framework. If a type is encountered, what is its
-fully qualified name? Is it something imported with a <code>use</code> declaration? or if it is a locally
-declared, what is the <code>mod</code> path to the local scope?</p>
-<p>Lockjaw also generates a test to verify the source path is correct. However passing a wrong path
-often result in weird type resolution errors at compile time. Double-check the source path if there
-are type resolution issues.</p>
+<p>The build script is required at the 'root' of your project, included binaries and any sub-crate with tests. Lockjaw will
+ask you to do this if this step is missing.</p>
+<p>The build script scans through all source under the crate and its dependencies to locate any bindings that should be a
+part of the dependency graph. This is required as <a href="path_resolution.html">path resolution</a> cannot be done in a <code>proc_macro</code></p>
 <h2 id="epilogue-macro"><a class="header" href="#epilogue-macro">Epilogue macro</a></h2>
 <p>You also must call
 the <a href="https://docs.rs/lockjaw/latest/lockjaw/macro.epilogue.html"><code>lockjaw::epilogue!()</code></a> macro in the
-root of your crate (<code>lib.rs</code> or
-<code>main.rs</code>) after all other uses of lockjaw, preferably at the end of the file.</p>
+root of your root crate (<code>lib.rs</code> or
+<code>main.rs</code>).</p>
 <pre><code class="language-rust no_run noplayground">// https://github.com/azureblaze/lockjaw/tree/main/userguide/projects/setup/src/main.rs
 lockjaw::epilogue!();</code></pre>
 <p><a href="https://github.com/azureblaze/lockjaw/tree/main/userguide/projects/setup/">Source</a> of this chapter</p>
@@ -842,18 +854,48 @@ working with third party libraries.</p>
 <p>Qualifiers are hints for Lockjaw to give a type different tags, so they can be bound separately.</p>
 <p>A qualifier must be declared first using
 the <a href="https://docs.rs/lockjaw/latest/lockjaw/attr.qualifier.html"><code>#[qualifier]</code></a> attribute macro.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_qualifier.rs:decl}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[qualifier]
+pub struct Q1;
+</code></pre>
 <p>The struct body does not matter and probably should be empty.</p>
 <p>Once the qualifier is declared, it can then be used in
 the <a href="https://docs.rs/lockjaw/latest/lockjaw/module_attributes/attr.qualified.html"><code>#[qualified]</code></a>
 attribute on a method in a <a href="https://docs.rs/lockjaw/latest/lockjaw/attr.module.html"><code>#[module]</code></a>,
 marking the return type as qualified. Lockjaw will treat the bindings as distinct types.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_qualifier.rs:module}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[module]
+impl MyModule {
+    #[provides]
+    pub fn provide_string() -&gt; String {
+        "string".to_owned()
+    }
+
+    #[provides]
+    #[qualified(Q1)]
+    pub fn provide_q1_string() -&gt; String {
+        "q1_string".to_owned()
+    }
+
+    #[provides]
+    #[qualified(Q2)]
+    pub fn provide_q2_string() -&gt; String {
+        "q2_string".to_owned()
+    }
+}</code></pre>
 <p>Qualified types can be injected using
 the <a href="https://docs.rs/lockjaw/latest/lockjaw/component_attributes/attr.qualified.html"><code>#[qualified]</code></a>
 attribute on the parameter, or the component method.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_qualifier.rs:component}}</code></pre>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/injectable_inject_qualified.rs:qualified}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[component(modules: [MyModule])]
+pub trait MyComponent {
+    fn string(&amp;self) -&gt; String;
+    #[qualified(Q1)]
+    fn q1_string(&amp;self) -&gt; String;
+    #[qualified(Q2)]
+    fn q2_string(&amp;self) -&gt; String;
+}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[inject]
+    pub fn new(#[qualified(Q)] s: String) -&gt; Foo {
+        Foo { s }
+    }</code></pre>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="providert"><a class="header" href="#providert"><code>Provider&lt;T&gt;</code></a></h1>
 <p>Normally when injecting a dependency, <em>one</em> instance of the dependency is <em>created before</em> creating
 the depending object. This may not be ideal since the depending object might:</p>
@@ -893,7 +935,33 @@ situation and refuse to compile your project.</p>
 <p>However sometimes the dependency is only used at runtime, not at object construction. This is
 especially common when singleton classes need to refer to each other. By using
 <code>Provider&lt;T&gt;</code> the cycle can be broken.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/provider_cyclic.rs:cyclic}}</code></pre>
+<pre><code class="language-rust no_run noplayground">struct Foo&lt;'component&gt; {
+    bar_provider: Provider&lt;'component, Box&lt;Bar&lt;'component&gt;&gt;&gt;,
+}
+
+#[injectable]
+impl&lt;'component&gt; Foo&lt;'component&gt; {
+    #[inject]
+    pub fn new(bar: Provider&lt;'component, Box&lt;Bar&lt;'component&gt;&gt;&gt;) -&gt; Foo&lt;'component&gt; {
+        Self { bar_provider: bar }
+    }
+
+    pub fn create_bar(&amp;self) -&gt; Box&lt;Bar&lt;'component&gt;&gt; {
+        self.bar_provider.get()
+    }
+}
+
+struct Bar&lt;'component&gt; {
+    foo: Box&lt;Foo&lt;'component&gt;&gt;,
+}
+
+#[injectable]
+impl&lt;'component&gt; Bar&lt;'component&gt; {
+    #[inject]
+    pub fn new(foo: Box&lt;Foo&lt;'component&gt;&gt;) -&gt; Bar&lt;'component&gt; {
+        Self { foo }
+    }
+}</code></pre>
 <p>In this example, while instantiating <code>Bar</code>, instantiates a <code>Foo</code>, <code>Bar</code> won't be created
 until <code>Foo.create_bar()</code> is called, hence creating either won't trigger a stack overflow.</p>
 <p>Trying to call <code>Provider.get</code> may still lead to a stack overflow, and Lockjaw cannot check this for
@@ -935,21 +1003,38 @@ impl FooFacotory&lt;'_&gt; {
 using <a href="https://docs.rs/lockjaw/latest/lockjaw/injectable_attributes/attr.factory.html"><code>#[factory]</code></a>
 instead
 of <a href="https://docs.rs/lockjaw/latest/lockjaw/injectable_attributes/attr.inject.html"><code>#[inject]</code></a></p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/injectable_factory.rs:factory}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[injectable]
+impl Foo {
+    #[factory]
+    fn create(#[runtime] i: i32, s: String) -&gt; Self {
+        Self { i, s }
+    }
+}</code></pre>
 <p>Runtime parameters needs to be marked with
 the <a href="https://docs.rs/lockjaw/latest/lockjaw/injectable_attributes/attr.factory.html#runtime"><code>#[runtime]</code></a>
 attribute.</p>
 <p><code>FooFactory</code> will be created by Lockjaw, with a method with the same name as the marked method
 taking only runtime parameters.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/injectable_factory.rs:factory_use}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    let foo = component.foo_factory().create(42);</code></pre>
 <h2 id="factory-traits"><a class="header" href="#factory-traits">Factory traits</a></h2>
 <p>The factory can also be instructed to implement a <code>trait</code> by using the
 <a href="https://docs.rs/lockjaw/latest/lockjaw/injectable_attributes/attr.factory.html#implementing"><code>implementing</code> metadata</a>
 .</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/injectable_factory_implementing.rs:factory}}</code></pre>
+<pre><code class="language-rust no_run noplayground">pub trait FooCreator {
+    fn create(&amp;self, i: i32) -&gt; Foo;
+}
+
+#[injectable]
+impl Foo {
+    #[factory(implementing: FooCreator)]
+    fn create(#[runtime] i: i32, phrase: String) -&gt; Self {
+        Self { i, phrase }
+    }
+}</code></pre>
 <p>The method name and runtime signature must match the <code>trait</code> method the factory should override.</p>
 <p>This is especially useful to bind the factory to a trait</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/injectable_factory_implementing.rs:bind}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[binds]
+    pub fn bind_foo_creator(impl_: FooFactory) -&gt; Cl&lt;dyn FooCreator&gt; {}</code></pre>
 <h2 id="examples-1"><a class="header" href="#examples-1">Examples</a></h2>
 <p>https://github.com/azureblaze/lockjaw/blob/main/tests/injectable_factory.rs
 https://github.com/azureblaze/lockjaw/blob/main/tests/injectable_factory_implementing.rs</p>
@@ -961,11 +1046,12 @@ and detect whether such binding exists.</p>
 <p>In Lockjaw a binding can be declared as optional by using
 the <a href="https://docs.rs/lockjaw/latest/lockjaw/module_attributes/attr.binds_option_of.html">#[binds_option_of]</a>
 method attribute in a <a href="https://docs.rs/lockjaw/latest/lockjaw/attr.module.html">#[module]</a></p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_binds_option_of.rs:binds}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[binds_option_of]
+    pub fn binds_option_of_string() -&gt; String {}</code></pre>
 <p>The <code>#[binds_option_of]</code> method should take no parameter and return the type <code>T</code> to bind
 as <a href="https://doc.rust-lang.org/std/option/enum.Option.html"><code>Option&lt;T&gt;</code></a>. This does not actually bind
 the <code>T</code>.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_binds_option_of.rs:component}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    fn option_string(&amp;self) -&gt; Option&lt;String&gt;;</code></pre>
 <p>If <code>T</code> is actually bound somewhere else, injecting <code>Option&lt;T&gt;</code> will result in <code>Some(T)</code>. Otherwise
 it will be <code>None</code>.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="multibinding"><a class="header" href="#multibinding">Multibinding</a></h1>
@@ -983,21 +1069,46 @@ the <a href="https://docs.rs/lockjaw/latest/lockjaw/module_attributes/attr.into_
 attribute, which means instead of directly binding to <code>T</code>, the binding should be collected into a
 <code>Vec&lt;T&gt;</code>.</p>
 <p>With the bindings:</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_vec.rs:into_vec}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[provides]
+    #[into_vec]
+    pub fn provide_string1() -&gt; String {
+        "string1".to_owned()
+    }
+
+    #[provides]
+    #[into_vec]
+    pub fn provide_string2() -&gt; String {
+        "string2".to_owned()
+    }</code></pre>
 <p><code>Vec&lt;String&gt;</code> can be injected with the values <code>["string1", "string2"]</code>. This works across all
 modules that are installed.</p>
 <p><code>#[into_vec]</code> can also be <a href="qualifiers.html"><code>#[qualified]</code></a></p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_vec.rs:qualified}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[provides]
+    #[qualified(Q)]
+    #[into_vec]
+    pub fn provide_q_string1() -&gt; String {
+        "q_string1".to_owned()
+    }</code></pre>
 <p>Which result in <code>#[qualified(Q)] Vec&lt;String&gt;</code>. Note that the container is qualified instead of the
 content.</p>
 <p><code>#[into_vec]</code> also works with <a href="binds.html"><code>#[binds]</code></a></p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_vec.rs:binds}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[binds]
+    #[into_vec]
+    pub fn bind_bar(impl_: crate::Bar) -&gt; Cl&lt;dyn crate::Foo&gt; {}
+
+    #[binds]
+    #[into_vec]
+    pub fn bind_baz(impl_: crate::Baz) -&gt; Cl&lt;dyn crate::Foo&gt; {}</code></pre>
 <p>Which allows <code>Vec&lt;Cl&lt;dyn Foo&gt;&gt;</code> to be injected. This is a common way to implement event callbacks.</p>
 <h2 id="providing-multiple-items"><a class="header" href="#providing-multiple-items">Providing multiple items</a></h2>
 <p>A method marked
 with <a href="https://docs.rs/lockjaw/latest/lockjaw/module_attributes/attr.elements_into_vec.html"><code>#[elements_into_vec]</code></a>
 can return <code>Vec&lt;T&gt;</code>, which will get merged with other <code>#[into_vec]</code> and <code>#[elements_into_vec]</code>.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_vec.rs:elements_into_vec}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[provides]
+    #[elements_into_vec]
+    pub fn provide_strings() -&gt; Vec&lt;String&gt; {
+        vec!["string3".to_owned(), "string4".to_owned()]
+    }</code></pre>
 <p>This allows multiple bindings to be provided at once. It also allows a binding method to decide not
 to provide anything at runtime, by returning an empty <code>Vec</code>.</p>
 <h2 id="duplication-behaviors"><a class="header" href="#duplication-behaviors">Duplication behaviors</a></h2>
@@ -1032,12 +1143,32 @@ be specified by a metadata in the <code>#[into_map]</code> attribute.</p>
 a <a href="https://doc.rust-lang.org/std/string/struct.String.html"><code>String</code></a>. The value must be a string
 literal, lockjaw is unable to resolve more complex compile time constants.</p>
 <p>This example binds to <code>HashMap&lt;String,String&gt;</code>:</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_map.rs:string_key}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[provides]
+    #[into_map(string_key: "1")]
+    pub fn provide_string1() -&gt; String {
+        "string1".to_owned()
+    }
+
+    #[provides]
+    #[into_map(string_key: "2")]
+    pub fn provide_string2() -&gt; String {
+        "string2".to_owned()
+    }</code></pre>
 <h3 id="i32_key"><a class="header" href="#i32_key"><code>i32_key</code></a></h3>
 <p><code>i32_key</code> specifies the map key is an <code>i32</code>. The value must be an i32 literal, lockjaw is unable to
 resolve more complex compile time constants.</p>
 <p>This example binds to <code>HashMap&lt;i32,String&gt;</code>:</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_map.rs:i32_key}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[provides]
+    #[into_map(i32_key: 1)]
+    pub fn provide_i32_string1() -&gt; String {
+        "string1".to_owned()
+    }
+
+    #[provides]
+    #[into_map(i32_key: 2)]
+    pub fn provide_i32_string2() -&gt; String {
+        "string2".to_owned()
+    }</code></pre>
 <p>Other types are not implemented. <code>i32</code> ought to be enough for everyone.</p>
 <h3 id="enum_key"><a class="header" href="#enum_key"><code>enum_key</code></a></h3>
 <p><code>i32_key</code> specifies the map key is an <code>enum</code>. Since the <code>enum</code> is going to be used as the map key,
@@ -1046,15 +1177,34 @@ implementing <a href="https://doc.rust-lang.org/std/cmp/trait.Eq.html"><code>Eq<
 and <a href="https://doc.rust-lang.org/std/hash/trait.Hash.html"><code>Hash</code></a>. It also must be a simple enum with
 no fields so Lockjaw knows how to compare them at compile time (meaning comparing the name is
 enough).</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_map.rs:enum}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[derive(Eq, PartialEq, Hash)]
+pub enum E {
+    Foo,
+    Bar,
+}</code></pre>
 <p>This example binds to <code>HashMap&lt;E,String&gt;</code>:</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_map.rs:enum_key}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[provides]
+    #[into_map(enum_key: E::Foo)]
+    pub fn provide_enum_string1() -&gt; String {
+        "string1".to_owned()
+    }
+
+    #[provides]
+    #[into_map(enum_key: Bar)]
+    pub fn provide_enum_string2() -&gt; String {
+        "string2".to_owned()
+    }</code></pre>
 <p>Lockjaw is able to infer the enum type (<code>E</code>) if the value is imported (<code>use E::Bar</code>), but the code
 maybe be more readable if the type is explicitly spelled out, especially most IDEs today cannot
 properly inspect tokens inside the metadata.</p>
 <h2 id="qualifiers-2"><a class="header" href="#qualifiers-2">Qualifiers</a></h2>
 <p><code>#[into_map]</code> can also be <a href="qualifiers.html"><code>#[qualified]</code></a></p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_provides_into_map.rs:qualified}}</code></pre>
+<pre><code class="language-rust no_run noplayground">    #[provides]
+    #[qualified(Q)]
+    #[into_map(string_key: "1")]
+    pub fn provide_q_string1() -&gt; String {
+        "q_string1".to_owned()
+    }</code></pre>
 <p>Which result in <code> #[qualified(Q)] HashMap&lt;String, String&gt;</code>. Note that the container is qualified
 instead of the content.</p>
 <h2 id="dynamic-map-entries"><a class="header" href="#dynamic-map-entries">Dynamic map entries</a></h2>
@@ -1074,7 +1224,22 @@ anything to it itself, and clients aren't forced to use the event.</p>
 <p>A <a href="https://docs.rs/lockjaw/latest/lockjaw/module_attributes/attr.multibinds.html"><code>#[multibinds]</code></a>
 method that returns the collection type should be declared in such case, to let Lockjaw know a
 multibinding collection is intended, but it may be empty.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_multibinds.rs:multibinds}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[module]
+impl MyModule {
+    #[multibinds]
+    fn vec_string() -&gt; Vec&lt;String&gt; {}
+
+    #[multibinds]
+    #[qualified(Q)]
+    fn q_vec_string() -&gt; Vec&lt;String&gt; {}
+
+    #[multibinds]
+    fn map_string_string() -&gt; HashMap&lt;String, String&gt; {}
+
+    #[multibinds]
+    #[qualified(Q)]
+    fn q_map_string_string() -&gt; HashMap&lt;String, String&gt; {}
+}</code></pre>
 <p><code>#[multibinds]</code> also serves as documentation on the <code>#[module]</code> specifying it is expecting the
 multibinding.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="subcomponents"><a class="header" href="#subcomponents">Subcomponents</a></h1>
@@ -1116,7 +1281,8 @@ distinct scoped bindings, modules, but also has access to bindings in its parent
 <p>A <code>#[subcomponent]</code> is installed by first listing it in
 a <a href="https://docs.rs/lockjaw/latest/lockjaw/attr.module.html#"><code>#[module]</code></a> using
 the <a href="https://docs.rs/lockjaw/latest/lockjaw/attr.module.html#subcomponents"><code>subcomponents</code> metadata</a></p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/sub_component.rs:list}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[module(subcomponents: [MySubcomponent])]
+impl ParentComponentModule {</code></pre>
 <p>Then installing the <code>#[module]</code> in a parent component. The parent component can be either a regular
 component or another subcomponent.</p>
 <h2 id="creating-a-instance-of-the-subcomponent"><a class="header" href="#creating-a-instance-of-the-subcomponent">Creating a instance of the subcomponent</a></h2>
@@ -1147,18 +1313,6 @@ provides <a href="https://docs.rs/lockjaw/latest/lockjaw/attr.define_component.h
 and<a href="https://docs.rs/lockjaw/latest/lockjaw/attr.define_subcomponent.html"><code>#[define_subcomponent]</code></a>
 which automatically collects modules from the entire build dependency tree, so they no longer need
 to be manually installed.</p>
-<h1 id="root-crate"><a class="header" href="#root-crate">Root crate</a></h1>
-<p>When using <code>#[define_component]</code> the component is not immediately generated, since modules from
-crates depending on the current crate may still want to add to the dependency graph.</p>
-<p>Lockjaw needs to know which crate is the root crate that is not depended on by other crates, which
-is done by passing
-the <a href="https://docs.rs/lockjaw/latest/lockjaw/macro.epilogue.html#root"><code>root</code> identifier</a> to
-the <a href="https://docs.rs/lockjaw/latest/lockjaw/macro.epilogue.html"><code>epilogue!()</code> macro</a></p>
-<pre><code>epilogue!(root);
-</code></pre>
-<p>Typically the root crate is the binary. Libraries can also be the root crate but that is probably
-not a good idea. Lockjaw will fail compilation if a crate using it depends on another crate that is
-a root crate.</p>
 <h2 id="automatically-installing-modules"><a class="header" href="#automatically-installing-modules">Automatically installing modules</a></h2>
 <p><a href="https://docs.rs/lockjaw/latest/lockjaw/attr.module.html"><code>#[modules]</code></a> can be automatically
 installed in a component by using
@@ -1167,7 +1321,18 @@ metadata takes a path to a <code>#[define_component]</code> <code>trait</code>. 
 <a href="https://docs.rs/lockjaw/latest/lockjaw/trait.Singleton.html"><code>Singleton</code></a>, which means it should be
 installed in every <code>#[define_component]</code> but not <code>#[define_subcomponent]</code>.</p>
 <p>Such modules cannot have fields.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/module_install_in.rs:install_in}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[module(install_in: MyComponent)]
+impl MyModule {
+    #[provides]
+    pub fn provide_string() -&gt; String {
+        "string".to_owned()
+    }
+}
+
+#[define_component]
+pub trait MyComponent {
+    fn string(&amp;self) -&gt; String;
+}</code></pre>
 <h2 id="entry-points"><a class="header" href="#entry-points">Entry points</a></h2>
 <p>Ideally a component should only be used at the program's entry point, and rest of the program should
 all use dependency injection, instead of trying to pass the component around. However sometimes
@@ -1183,7 +1348,20 @@ installed, the</p>
 <pre><code class="language-rust no_run noplayground">&lt;dyn FooEntryPoint&gt;::get(component : &amp;dyn FooComponent) -&gt; &amp;dyn FooEntryPoint</code></pre>
 <p>method can be used to cast the opaque component into the entry point, and access the dependency
 graph.</p>
-<pre><code class="language-rust no_run noplayground">{{#include ../../tests/entry_point.rs:entry_point}}</code></pre>
+<pre><code class="language-rust no_run noplayground">#[entry_point(install_in: MyComponent)]
+pub trait MyEntryPoint {
+    fn i(&amp;self) -&gt; i32;
+}
+
+#[define_component]
+pub trait MyComponent {}
+
+#[test]
+pub fn main() {
+    let component: Box&lt;dyn MyComponent&gt; = &lt;dyn MyComponent&gt;::new();
+
+    assert_eq!(&lt;dyn MyEntryPoint&gt;::get(component.as_ref()).i(), 42)
+}</code></pre>
 <h2 id="testing-with-define_component"><a class="header" href="#testing-with-define_component">Testing with <code>#[define_component]</code></a></h2>
 <p>While compiling tests, Lockjaw gathers <code>install_in</code> modules only from the <code>[dev-dependencies]</code>
 section of <code>Cargo.toml</code> instead of the regular <code>[dependencies]</code>, even though <code>[dev-dependencies]</code>
@@ -1198,9 +1376,6 @@ should not use Lockjaw in any serious project.</p>
 language features to make Lockjaw usable.</p>
 <h2 id="path-resolution"><a class="header" href="#path-resolution"><a href="path_resolution.html">Path resolution</a></a></h2>
 <p>Lockjaw need to know the fully qualified path of a type, so they can be compared against each other.</p>
-<h2 id="cross-macro-communication"><a class="header" href="#cross-macro-communication"><a href="cross_macro_communication.html">Cross macro communication</a></a></h2>
-<p>Lockjaw has seperated declaration phase (what the bindings are) and code generation phase (building
-the dependency graph). The generation phase need to know everything the declaration phase has seen.</p>
 <h2 id="bypassing-visibility"><a class="header" href="#bypassing-visibility"><a href="visibility_bypass.html">Bypassing visibility</a></a></h2>
 <p>A lot of symbols need should be private to the module/crate, but also give an exclusive bypass to
 Lockjaw, so it can be used by a component generated elsewhere, possibly a different crate.</p>
@@ -1221,17 +1396,10 @@ solution to this, but <a href="https://github.com/rust-lang/rfcs/pull/2320">eage
 required for a <code>proc_macro</code> to be able to utilize it.</p>
 <p><a href="https://docs.rs/proc-macro2/1.0.28/proc_macro2/struct.Span.html#method.source_file">proc_macro2::Span::source_file()</a>
 also exists, but it is nightly feature and requires <code>procmacro2_semver_exempt</code> which is contagious.</p>
-<p>Since the with <a href="cross_macro_communication.html">cross macro communication</a> hacks the user only need to
-do this once per file, we've decided to let the user pass the current path with
-the <a href="https://docs.rs/lockjaw/latest/lockjaw/macro.prologue.html"><code>prologue!()</code></a> macro. We will need
-to parse the whole file later anyway, so we take the file name and derive the <code>mod</code> path from it.</p>
-<p>To make sure the <code>prologue!()</code> macro is called in every file, it declares a hidden symbol locally
-which all other Lockjaw <code>proc_macro</code> will try to use, so if the <code>prolouge!()</code> is missing compilation
-will fail. In later steps we also verify <code>prologue!()</code> is the first Lockjaw macro called in the
-file, as the current file info is stored in global memory and must be reset in each file.</p>
-<p><code>prolouge!()</code> also generates a test to make sure the path passed in matches what <code>file!()</code> would
-give. However using the wrong path will usually cause Lockjaw to fail miserably since all type info
-are messed up, and the test will not even be run, which makes it not too useful.</p>
+<p>In the Lockjaw build script this is resolved by looking at the crate's manifest and using
+<code>CARGO_CRATE_NAME</code>/<code>CARGO_PKG_NAME</code> along with <code>cargo metadata</code> to figure out the exact path to the source. Path info
+is only needed during dependency gathering which is no longer done with <code>proc_macro</code>, and component generation which is
+always <code>::crate::</code> and never reference by other part of the code.</p>
 <h2 id="mod-structure-and-use-declarations"><a class="header" href="#mod-structure-and-use-declarations"><code>mod</code> structure and <code>use</code> declarations</a></h2>
 <p>A file can still contain nested <code>mod</code> in it, each importing more symbols with the <code>use</code> declaration.
 For a given token, lockjaw needs to know which <code>mod</code> it is in, and what symbols are brought into
@@ -1241,79 +1409,11 @@ what <code>use</code> are inside it.</p>
 this, however the tokens it produces does not record
 proper <a href="https://docs.rs/proc-macro2/1.0.28/proc_macro2/struct.Span.html">spans</a>, so we cannot use it
 to find the position of <code>mod</code>.</p>
-<p>Lockjaw handles this by using another AST
-parser (<a href="https://crates.io/crates/tree-sitter">tree_sitter</a>) to parse the file.</p>
-<h2 id="finding-which-mod-a-token-is-in"><a class="header" href="#finding-which-mod-a-token-is-in">Finding which <code>mod</code> a token is in</a></h2>
-<p>Position info of a token is encoded in
-the <a href="https://docs.rs/proc-macro2/1.0.28/proc_macro2/struct.Span.html">span</a> object, but currently it
-is opaque. Lockjaw forcefully extract the data from
-span's <a href="https://doc.rust-lang.org/std/fmt/trait.Debug.html"><code>Debug</code></a> representation, which contains
-the token's byte range. No need to say this is an awful thing to do.</p>
-<p>Once the byte position is know, it can be used to find the deepest enclosing <code>mod</code>.</p>
-<h2 id="handling-file-mod"><a class="header" href="#handling-file-mod">Handling file <code>mod</code></a></h2>
-<p>Rust currently handles file <code>mod</code> as includes internally. It inserts the content of the file
-directly into the token stream, and ends up in a giant stream for the whole crate. The consequence
-of this is the byte position the <code>proc_marco</code> token actually have is shifted around by inserted
-files, and will not match its byte position inside the file the 3p AST parser sees.</p>
-<p>Fortunately the Lockjaw <code>proc_macro</code> has the span of the <code>prologue!()</code> macro itself, and it knows
-the macro must appear only once inside the file. Lockjaw is able to inspect the AST to find the file
-position of the <code>prologue!()</code> macro, and calculate the offset between file position and token
-position.</p>
-<p>One of the effect is Lockjaw has to ban file <code>mod</code> that appears after <code>prologue!()</code>, as it will
-invalidate the offset. Theoretically Lockjaw can recursively calculate the size of the file <code>mod</code>,
-but limiting the position of file <code>mod</code> does not seem too bad.</p>
-<div style="break-before: page; page-break-before: always;"></div><h1 id="cross-macro-communication-1"><a class="header" href="#cross-macro-communication-1">Cross macro communication</a></h1>
-<p>Lockjaw <code>proc_macro</code> are not independent, it requires inputs from other macros in strict order:</p>
-<ol>
-<li>A first pass on the file to <a href="path_resolution.html">generate mod info for path resolution</a></li>
-<li>Generating binding definition, with paths resolved to fully qualified path using info from step
-1.</li>
-<li>Actual generation of the components, after all bindings are defined.</li>
-</ol>
-<p>Additionally the binding info in step 2. may be needed across crates.</p>
-<h2 id="intra-crate-macro-communication"><a class="header" href="#intra-crate-macro-communication">Intra-crate macro communication</a></h2>
-<p>Lockjaw macros talk to each other by storing states in a static mutable variable. This requires the
-token/macro phase of rust to invoke all macros in a single process, single thread, sequentially as
-they appear in the source, as well as expanding file <code>mod</code> in place as soon as they are encountered.</p>
-<p>Rust does not have any guarantee when proc_macros are executed, the order they are executed, the
-threads they are executed on, or even the process they are executed on. This can easily break if the
-compilation mode changes, such as incremental compilation (some proc_marco are not re-invoked) and
-multi-threaded compilation.</p>
-<p>It would be nice if rust somehow allows proc_macro to generate pieces of serializable metadata that
-can be read by other proc_macros.</p>
-<h2 id="intra-crate-macro-communication-1"><a class="header" href="#intra-crate-macro-communication-1">Intra-crate macro communication</a></h2>
-<p>Lockjaw allows <code>#[inject]</code> in a crate to be used by another crate that depends on it. Additionally
-<code>#[denfine_component]</code> allows components to be generated at the root crate, using binding info from
-every crate it directly or indirectly depends on. This means a crate must be able to read the
-binding metadata of every crate.</p>
-<p>Lockjaw handles this by writing the binding metadata of each crate to a file, which other crates can
-read. This creates a few issues:</p>
-<h3 id="proc_macro-writes-data-to-build-script-out_dir"><a class="header" href="#proc_macro-writes-data-to-build-script-out_dir">proc_macro writes data to build script OUT_DIR</a></h3>
-<p>To handle cross-crate dependencies, lockjaw writes the bindings metadata to OUT_DIR so other crates
-can read it later.</p>
-<p>Rust only specifies the build script should write to OUT_DIR, while proc_macro seems to run on the
-same process and has the environment variable (when there is a build script, so lockjaw forces the
-user to use a build script even though it is doing nothing).</p>
-<h3 id="proc_macro-reads-data-from-disk"><a class="header" href="#proc_macro-reads-data-from-disk">proc_macro reads data from disk</a></h3>
-<p>Same as above, lockjaw proc_macro reads data from other crates output so cross-crate dependency
-graph can be generated.</p>
-<h3 id="proc_macro-writes-data-to-other-crates-out_dir"><a class="header" href="#proc_macro-writes-data-to-other-crates-out_dir">proc_macro writes data to other crate's OUT_DIR</a></h3>
-<p>Also for cross-crate dependency, the binding metadata from other crates are required. While lockjaw
-can determine the crate's dependencies with <code>cargo tree</code> (proc_macro spawning processes is probably
-also a bad idea), it has no idea where their OUT_DIR are.</p>
-<p>The current solution is to hardcode the proc_macro library's OUT_DIR into itself with a build
-script, and let other crates that uses lockjaw also write their OUT_DIR to the proc_macro library's
-OUT_DIR so it can be looked up later. Mutating data outside a crate's bound seems really bad.</p>
-<p>This can be solved if:</p>
-<ul>
-<li>Rust allow looking up OUT_DIR of crates depended on.</li>
-<li>Rust allow compile time reflection such as inspecting whether a const string exists and reading
-its value, so the metadata can be encoded.</li>
-</ul>
+<p>Lockjaw handles this by parsing the whole file in the build script so it knows which <code>mod</code> it is in.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="bypassing-visibility-1"><a class="header" href="#bypassing-visibility-1">Bypassing visibility</a></h1>
 <p>Visibility control works a bit weird with dependency injection. When a type is private, only context
 that have visibility should be able to inject it, but the dependency injection framework should
-still be able to construct it, even if the generated code is in some random <code>mod</code>. Currently Rust
+still be able to construct it, even if the generated code is in some random <code>mod</code>. Currently, Rust
 only allow visibility bypass to be granted to a <code>mod</code> that is a parent of the current <code>mod</code>.</p>
 <p>Lockjaw handles this with
 the <a href="https://docs.rs/lockjaw/0.2.1/lockjaw/attr.component_visible.html"><code>#[component_visible]</code></a>
@@ -1329,11 +1429,20 @@ be added to a mod later either. However with Lockjaw information to generate the
 not be available at the time, especially for component builders. Furthermore, the implementation may
 not even be possible in the same crate
 for <a href="https://docs.rs/lockjaw/0.2.0/lockjaw/attr.define_component.html"><code>#[define_component]</code></a>.</p>
-<p>Component builders should be associated method of the component, or at least a free-standing
-function in the same <code>mod</code>. Otherwise it will be hard for users to locate them.</p>
+<p>Component builders should be associated method of the component, or at least a freestanding
+function in the same <code>mod</code>. Otherwise, it will be hard for users to locate them.</p>
 <p>Lockjaw handles this by implementing such methods by calling an <code>extern</code> method. Which will later
 be generated. While this works, if the user forgets to call the code generation macro, a cryptic
 linker error about missing symbol will appear.</p>
+<p>In addition, some late implementation methods needs a unique name since it might clash with other components. A unique
+name cannot be generated because the only thing we know is the local component name in a <code>proc_marco</code>, and a component
+with the same name might exist under a different <code>mod</code>/<code>crate</code>. Instead, the generated code declares a
+<code>static mut *const ()</code> address
+under the same <code>mod</code> as the component which it will <a href="https://doc.rust-lang.org/std/mem/fn.transmute.html">transmute</a>
+when it needs to call the implementation. The late generated implementation will set this address to the real
+implementation in the component's builder(implementation knows the full path of the address.). This is a constant
+assignment and hopefully the compiler can optimize it
+away.</p>
 <div style="break-before: page; page-break-before: always;"></div><h1 id="code-of-conduct"><a class="header" href="#code-of-conduct">Code of Conduct</a></h1>
 <h2 id="our-pledge"><a class="header" href="#our-pledge">Our Pledge</a></h2>
 <p>In the interest of fostering an open and welcoming environment, we as
